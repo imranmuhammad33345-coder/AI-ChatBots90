@@ -1,0 +1,5 @@
+{
+  "name": "MathGPT",
+  "description": "AI Math Solver and Homework Helper",
+  "requestFramePermissions": ["camera"]
+}

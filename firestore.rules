@@ -1,0 +1,106 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required, immutable) - The user's unique ID.
+    //   - email: string (required) - The user's email address.
+    //   - displayName: string (optional) - The user's display name.
+    //   - photoURL: string (optional) - The user's profile picture URL.
+    //   - createdAt: timestamp (required, immutable) - When the user was created.
+    //
+    // Collection: queries
+    // Document ID: {queryId}
+    // Fields:
+    //   - id: string (required, immutable) - The query's unique ID.
+    //   - userId: string (required, immutable) - The ID of the user who created the query.
+    //   - text: string (optional) - The text of the math problem.
+    //   - imageUrl: string (optional) - The URL of the uploaded image.
+    //   - result: string (required) - The AI-generated solution.
+    //   - createdAt: timestamp (required, immutable) - When the query was created.
+    //   - isShared: boolean (optional) - Whether the query is publicly shared.
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == request.auth.uid;
+    }
+
+    function uidNotModified() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == resource.data.uid;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUrl(url) {
+      return url is string && (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    function isValidOptionalString(field, minLen, maxLen) {
+      return !(field in request.resource.data) ||
+             (request.resource.data[field] is string &&
+              request.resource.data[field].size() >= minLen &&
+              request.resource.data[field].size() <= maxLen);
+    }
+
+    function isValidUser(data) {
+      return hasRequiredFields(['uid', 'email', 'createdAt']) &&
+             data.uid is string && data.uid.size() > 0 && data.uid.size() < 100 &&
+             data.email is string && isValidEmail(data.email) &&
+             data.createdAt is timestamp &&
+             isValidOptionalString('displayName', 0, 100) &&
+             (!( 'photoURL' in data ) || isValidUrl(data.photoURL));
+    }
+
+    function isValidQuery(data) {
+      return hasRequiredFields(['id', 'userId', 'result', 'createdAt']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() < 100 &&
+             data.userId is string && data.userId.size() > 0 && data.userId.size() < 100 &&
+             data.result is string && data.result.size() > 0 && data.result.size() < 1048576 && // 1MB limit
+             data.createdAt is timestamp &&
+             isValidOptionalString('text', 0, 10000) &&
+             (!( 'imageUrl' in data ) || isValidUrl(data.imageUrl)) &&
+             (!( 'isShared' in data ) || data.isShared is bool);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && uidUnchanged();
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && uidNotModified() && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isOwner(userId);
+    }
+
+    match /queries/{queryId} {
+      allow read: if (isAuthenticated() && resource.data.userId == request.auth.uid) || resource.data.isShared == true;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid && isValidQuery(request.resource.data);
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid && isValidQuery(request.resource.data) && request.resource.data.userId == resource.data.userId && request.resource.data.createdAt == resource.data.createdAt && request.resource.data.id == resource.data.id;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+  }
+}
